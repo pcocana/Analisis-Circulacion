@@ -475,6 +475,8 @@ body {
 .estado-sinuso { background: var(--red-light); color: var(--red); }
 .estado-noaplica { background: var(--amber-light); color: var(--amber); }
 .estado-noenc { background: var(--gray-light); color: var(--muted); }
+.estado-nocatalogo { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+.estado-disponible { background: #eff6ff; color: #1e40af; }
 
 .match-title {
   font-size: 12px;
@@ -697,8 +699,21 @@ body {
       </div>
     </div>
 
-    <!-- Período -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+    <!-- File 3: Catalog (full width) -->
+    <div style="margin-bottom:16px;">
+      <div class="drop-zone" id="dzCat" onclick="document.getElementById('fileCat').click()" style="background:#f5f0ff;border-color:#c4b5fd;">
+        <input type="file" id="fileCat" accept=".xlsx,.xls,.csv">
+        <button class="dz-clear" onclick="event.stopPropagation(); clearFile('cat')" title="Quitar">✕</button>
+        <span class="dz-tag" style="background:rgba(109,40,217,.1);color:#6d28d9;">Catálogo KOHA</span>
+        <span class="dz-icon">🗄️</span>
+        <div class="dz-label">Excel del Catálogo (opcional pero recomendado)</div>
+        <div class="dz-hint">Exportación de la colección KOHA — permite distinguir "no disponible en biblioteca" de "disponible pero sin uso"<br><span style="font-size:10px;color:#7c3aed;">Mismo formato del Verificador de Catálogo de la Suite Académica</span></div>
+        <div class="dz-filename" id="fnCat"></div>
+      </div>
+    </div>
+
+    <!-- Período y Programa -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
       <div>
         <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:5px;">Período cubierto</label>
         <input type="text" id="inputPeriodo" class="filter-search" style="width:100%" placeholder="Ej. 2023–2025" value="2023–2025">
@@ -706,6 +721,13 @@ body {
       <div>
         <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:5px;">Carrera / Programa</label>
         <input type="text" id="inputCarrera" class="filter-search" style="width:100%" placeholder="Se detecta automáticamente">
+      </div>
+      <div>
+        <label style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:5px;">Programa a comparar en circulación <span style="color:var(--gold);font-weight:900;">★</span></label>
+        <select id="inputPrograma" class="filter-select" style="width:100%;border-color:var(--gold);padding:6px 10px;background:var(--white);" disabled>
+          <option value="">— Carga primero el Excel de circulación —</option>
+        </select>
+        <div style="font-size:10.5px;color:var(--muted);margin-top:3px;">Se llena automáticamente al cargar el Excel de circulación</div>
       </div>
     </div>
 
@@ -735,16 +757,16 @@ body {
         <div class="card-sub" id="cConUsoN">0 referencias en uso</div>
       </div>
       <div class="card c-red">
-        <div class="card-icon">⚠️</div>
+        <div class="card-icon">📭</div>
         <div class="card-value" id="cSinUso">0</div>
-        <div class="card-label">Sin circulación <span style="font-size:9px;font-weight:500;letter-spacing:0;text-transform:none;background:rgba(176,42,55,.12);padding:1px 6px;border-radius:10px;margin-left:4px;">referencias</span></div>
-        <div class="card-sub" id="cSinUsoSub">Básica: 0 · Comp: 0</div>
+        <div class="card-label">Sin circulación <span style="font-size:9px;font-weight:500;letter-spacing:0;text-transform:none;background:rgba(176,42,55,.12);padding:1px 6px;border-radius:10px;margin-left:4px;">refs</span></div>
+        <div class="card-sub" id="cSinUsoSub">En catálogo pero sin préstamos</div>
       </div>
       <div class="card c-gold">
-        <div class="card-icon">🔄</div>
-        <div class="card-value" id="cPrestamos">0</div>
-        <div class="card-label">Préstamos período</div>
-        <div class="card-sub" id="cPeriodoSub">títulos únicos en circulación</div>
+        <div class="card-icon">❌</div>
+        <div class="card-value" id="cNoCat">0</div>
+        <div class="card-label">No en catálogo <span style="font-size:9px;font-weight:500;letter-spacing:0;text-transform:none;background:rgba(201,151,0,.12);padding:1px 6px;border-radius:10px;margin-left:4px;">refs</span></div>
+        <div class="card-sub" id="cNoCatSub">Posible adquisición</div>
       </div>
     </div>
 
@@ -797,6 +819,7 @@ body {
           <span class="radio-btn active" data-val="" onclick="setRadio('estado',this)">Todos</span>
           <span class="radio-btn" data-val="con-uso" onclick="setRadio('estado',this)">Con uso</span>
           <span class="radio-btn" data-val="sin-uso" onclick="setRadio('estado',this)">Sin uso</span>
+          <span class="radio-btn" data-val="no-catalogo" onclick="setRadio('estado',this)">No en catálogo</span>
         </div>
       </div>
       <div class="filter-group">
@@ -841,27 +864,28 @@ body {
 // ══════════════════════════════════════════════════════════
 // ESTADO GLOBAL
 // ══════════════════════════════════════════════════════════
-let rawExt = null, rawCirc = null;
+let rawExt = null, rawCirc = null, rawCat = null;
 let allResults = [], filtered = [];
 let sortKey = 'prestamos', sortDir = -1;
-let filterTipo = '', filterEstado = '', currentPage = 0;
+let filterTipo = '', filterEstado = '', currentPage = 0, programaActivo = '';
 const PAGE_SIZE = 50;
 
 // ══════════════════════════════════════════════════════════
 // DRAG & DROP y FILE LOADING
 // ══════════════════════════════════════════════════════════
-['dzExt','dzCirc'].forEach(id => {
+['dzExt','dzCirc','dzCat'].forEach(id => {
   const dz = document.getElementById(id);
   dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
   dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
   dz.addEventListener('drop', e => {
     e.preventDefault(); dz.classList.remove('drag');
     const f = e.dataTransfer.files[0];
-    if (f) handleFile(id === 'dzExt' ? 'ext' : 'circ', f);
+    if (f) handleFile(id === 'dzExt' ? 'ext' : id === 'dzCat' ? 'cat' : 'circ', f);
   });
 });
 document.getElementById('fileExt').addEventListener('change', e => { if(e.target.files[0]) handleFile('ext', e.target.files[0]); });
 document.getElementById('fileCirc').addEventListener('change', e => { if(e.target.files[0]) handleFile('circ', e.target.files[0]); });
+document.getElementById('fileCat').addEventListener('change', e => { if(e.target.files[0]) handleFile('cat', e.target.files[0]); });
 
 function handleFile(tipo, file) {
   const reader = new FileReader();
@@ -880,10 +904,16 @@ function handleFile(tipo, file) {
           document.getElementById('inputCarrera').value = m[1].trim();
         }
       }
-    } else {
+    } else if (tipo === 'circ') {
       rawCirc = wb;
       document.getElementById('dzCirc').classList.add('loaded');
       document.getElementById('fnCirc').textContent = file.name;
+      // Poblar dropdown de programas
+      poblarSelectPrograma(wb);
+    } else {
+      rawCat = wb;
+      document.getElementById('dzCat').classList.add('loaded');
+      document.getElementById('fnCat').textContent = file.name;
     }
     checkReady();
   };
@@ -896,17 +926,58 @@ function clearFile(tipo) {
     document.getElementById('dzExt').classList.remove('loaded');
     document.getElementById('fnExt').textContent = '';
     document.getElementById('fileExt').value = '';
-  } else {
+  } else if (tipo === 'circ') {
     rawCirc = null;
     document.getElementById('dzCirc').classList.remove('loaded');
     document.getElementById('fnCirc').textContent = '';
     document.getElementById('fileCirc').value = '';
+    const sel = document.getElementById('inputPrograma');
+    sel.innerHTML = '<option value="">— Carga primero el Excel de circulación —</option>';
+    sel.disabled = true;
+  } else {
+    rawCat = null;
+    document.getElementById('dzCat').classList.remove('loaded');
+    document.getElementById('fnCat').textContent = '';
+    document.getElementById('fileCat').value = '';
   }
   checkReady();
 }
 
 function checkReady() {
   document.getElementById('btnProcesar').disabled = !(rawExt && rawCirc);
+}
+
+function poblarSelectPrograma(wb) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+  // Encontrar columna Carrera
+  let headerRow = 0;
+  for (let i = 0; i < Math.min(rows.length, 5); i++) {
+    const r = rows[i].map(c2 => String(c2).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''));
+    if (r.some(h => h.includes('carrera') || h.includes('programa'))) { headerRow = i; break; }
+  }
+  const headers = rows[headerRow].map(c2 => String(c2).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''));
+  const iCarrera = headers.findIndex(h => h.includes('carrera') || h.includes('programa'));
+  if (iCarrera === -1) return;
+
+  // Recolectar carreras únicas y ordenarlas
+  const carreras = new Map();
+  for (let i = headerRow + 1; i < rows.length; i++) {
+    const v = String(rows[i][iCarrera] || '').trim();
+    if (v) carreras.set(v, (carreras.get(v) || 0) + 1);
+  }
+  const ordenadas = [...carreras.entries()].sort((a, b) => b[1] - a[1]);
+
+  const sel = document.getElementById('inputPrograma');
+  sel.innerHTML = '<option value="">— Todos los programas (sin filtro) —</option>';
+  ordenadas.forEach(([nombre, n]) => {
+    const opt = document.createElement('option');
+    opt.value = nombre;
+    opt.textContent = `${nombre}  (${n.toLocaleString()} préstamos)`;
+    sel.appendChild(opt);
+  });
+  sel.disabled = false;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1039,31 +1110,69 @@ function parsearCirculacion(wb) {
   // Encontrar cabecera
   let headerRow = 0;
   for (let i = 0; i < Math.min(rows.length, 5); i++) {
-    const r = rows[i].map(c => norm(String(c)));
-    if (r.some(c => c.includes('titulo') || c.includes('signatura') || c.includes('autor'))) {
+    const r = rows[i].map(c2 => norm(String(c2)));
+    if (r.some(c2 => c2.includes('titulo') || c2.includes('signatura') || c2.includes('autor'))) {
       headerRow = i; break;
     }
   }
 
-  const headers = rows[headerRow].map(c => norm(String(c)));
-  const iPrestsamos = headers.findIndex(h => h.includes('prestamo'));
+  const headers = rows[headerRow].map(c2 => norm(String(c2)));
+  const iCarrera   = headers.findIndex(h => h.includes('carrera') || h.includes('programa'));
   const iSignatura = headers.findIndex(h => h.includes('signatura'));
-  const iTitulo = headers.findIndex(h => h.includes('titulo') || h.includes('titu'));
-  const iAutor = headers.findIndex(h => h.includes('autor'));
+  const iTitulo    = headers.findIndex(h => h.includes('titulo') || h.includes('titu'));
+  const iAutor     = headers.findIndex(h => h.includes('autor'));
 
-  // Agrupar por título+signatura → contar préstamos
+  // Agrupar por título+autor → contar préstamos totales y por carrera
   const map = new Map();
   for (let i = headerRow + 1; i < rows.length; i++) {
     const r = rows[i];
-    const titulo = String(r[iTitulo !== -1 ? iTitulo : 2] || '').trim();
-    const autor = String(r[iAutor !== -1 ? iAutor : 3] || '').trim();
+    const titulo    = String(r[iTitulo    !== -1 ? iTitulo    : 2] || '').trim();
+    const autor     = String(r[iAutor     !== -1 ? iAutor     : 3] || '').trim();
     const signatura = String(r[iSignatura !== -1 ? iSignatura : 1] || '').trim();
+    const carrera   = String(r[iCarrera   !== -1 ? iCarrera   : 0] || '').trim();
     if (!titulo) continue;
     const key = norm(titulo) + '||' + norm(autor);
-    if (!map.has(key)) map.set(key, { titulo, autor, signatura, prestamos: 0 });
-    map.get(key).prestamos++;
+    if (!map.has(key)) map.set(key, { titulo, autor, signatura, prestamos: 0, porCarrera: {} });
+    const item = map.get(key);
+    item.prestamos++;
+    const cn = norm(carrera);
+    if (cn) item.porCarrera[cn] = (item.porCarrera[cn] || 0) + 1;
   }
   return [...map.values()];
+}
+
+function parsearCatalogo(wb) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  // Find header row
+  let headerRow = 0;
+  for (let i = 0; i < Math.min(rows.length, 6); i++) {
+    const r = rows[i].map(c2 => norm(String(c2)));
+    if (r.some(h => h.includes('titulo') || h.includes('titu') || h.includes('signatura'))) {
+      headerRow = i; break;
+    }
+  }
+  const headers = rows[headerRow].map(c2 => norm(String(c2)));
+  const iTitulo   = headers.findIndex(h => h.includes('titulo') || h.includes('titu'));
+  const iAutor    = headers.findIndex(h => h.includes('autor'));
+  const iSignat   = headers.findIndex(h => h.includes('signatura') || h.includes('topog'));
+  const iAnio     = headers.findIndex(h => h.includes('anio') || h.includes('año') || h.includes('fecha') || h.includes('year'));
+  const iEjemp    = headers.findIndex(h => h.includes('ejemplar') || h.includes('copies') || h.includes('cantidad'));
+
+  const items = [];
+  for (let i = headerRow + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const titulo = String(r[iTitulo !== -1 ? iTitulo : 0] || '').trim();
+    if (!titulo || titulo.length < 3) continue;
+    items.push({
+      titulo,
+      autor:     String(r[iAutor    !== -1 ? iAutor    : 1] || '').trim(),
+      signatura: String(r[iSignat   !== -1 ? iSignat   : 2] || '').trim(),
+      anio:      String(r[iAnio     !== -1 ? iAnio     : 3] || '').trim(),
+      ejemplares: parseInt(r[iEjemp !== -1 ? iEjemp    : -1]) || 1
+    });
+  }
+  return items;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1095,42 +1204,113 @@ async function procesarDatos() {
     addLog('▸ Leyendo Excel de Circulación KOHA...');
     await new Promise(r => setTimeout(r, 30));
     const circ = parsearCirculacion(rawCirc);
-    addLog(`  ✓ ${circ.length} títulos únicos, ${circ.reduce((a,c)=>a+c.prestamos,0).toLocaleString()} préstamos totales`);
+    const totalTransacciones = circ.reduce((a,c)=>a+c.prestamos,0);
+    addLog(`  ✓ ${circ.length} títulos únicos, ${totalTransacciones.toLocaleString()} préstamos totales en el período`);
 
+    let cat = null;
+    if (rawCat) {
+      addLog('▸ Leyendo Catálogo KOHA...');
+      await new Promise(r => setTimeout(r, 30));
+      cat = parsearCatalogo(rawCat);
+      addLog(`  ✓ ${cat.length} títulos en el catálogo`);
+    } else {
+      addLog('  ℹ Sin catálogo cargado — solo se usará circulación para el análisis');
+    }
+
+    const programaInput = document.getElementById('inputPrograma').value.trim();
+    const programaNorm  = norm(programaInput);
+
+    // Si hay programa definido, calcular préstamos efectivos del programa por título
+    if (programaNorm) {
+      circ.forEach(item => {
+        item.prestamosEfectivos = 0;
+        for (const [k, v] of Object.entries(item.porCarrera)) {
+          if (k.includes(programaNorm.slice(0,10)) || programaNorm.includes(k.slice(0,10))) {
+            item.prestamosEfectivos += v;
+          }
+        }
+      });
+      const totalProg = circ.reduce((a,c2) => a + c2.prestamosEfectivos, 0);
+      addLog(`  ✓ Programa "${programaInput}": ${totalProg.toLocaleString()} préstamos del programa en el período`);
+    } else {
+      circ.forEach(item => { item.prestamosEfectivos = item.prestamos; });
+      addLog('  ℹ Sin programa definido — se usan préstamos totales');
+    }
     addLog('▸ Ejecutando matching fuzzy...');
     await new Promise(r => setTimeout(r, 30));
 
     const THRESHOLD = 52;
     allResults = [];
-    let matched = 0, noaplica = 0;
+    let conUsoN = 0, sinUsoN = 0, noCatN = 0, noaplica = 0;
 
     for (const ref of refs) {
       const parsed = parseRef(ref.ref);
 
       if (parsed.isArticle) {
-        allResults.push({ ...ref, parsed, matchItem: null, prestamos: 0, score: -1, estado: 'no-aplica' });
+        allResults.push({ ...ref, parsed, matchItem: null, catItem: null, prestamos: 0, score: -1, estado: 'no-aplica' });
         noaplica++;
         continue;
       }
 
-      let bestScore = 0, bestItem = null;
+      // Step 1: match against catalog (if available)
+      let catScore = 0, catItem = null;
+      if (cat) {
+        for (const item of cat) {
+          const { score } = matchScore(parsed, item);
+          if (score > catScore) { catScore = score; catItem = item; }
+        }
+        if (catScore < THRESHOLD) catItem = null;
+      }
+
+      // Step 2: match against circulation
+      let circScore = 0, circItem = null;
       for (const item of circ) {
         const { score } = matchScore(parsed, item);
-        if (score > bestScore) { bestScore = score; bestItem = item; }
+        if (score > circScore) { circScore = score; circItem = item; }
+      }
+      // Solo cuenta como "con uso" si hay préstamos efectivos del programa
+      if (circScore < THRESHOLD || (programaNorm && circItem && circItem.prestamosEfectivos === 0)) {
+        circItem = null;
       }
 
-      if (bestScore >= THRESHOLD && bestItem) {
-        matched++;
-        allResults.push({ ...ref, parsed, matchItem: bestItem, prestamos: bestItem.prestamos, score: Math.round(bestScore), estado: 'con-uso' });
-      } else if (bestScore >= 30 && bestItem) {
-        // Coincidencia débil — sin uso confirmado
-        allResults.push({ ...ref, parsed, matchItem: null, prestamos: 0, score: Math.round(bestScore), estado: 'sin-uso' });
+      // Determine estado
+      let estado, matchItem, prestamos, score;
+      if (circItem) {
+        // Has circulation → definitely in catalog and in use
+        estado = 'con-uso';
+        matchItem = circItem;
+        prestamos = circItem.prestamosEfectivos;   // préstamos del programa
+        score = Math.round(circScore);
+        conUsoN++;
+      } else if (cat && catItem) {
+        // In catalog but no circulation recorded
+        estado = 'sin-uso';
+        matchItem = catItem;
+        prestamos = 0;
+        score = Math.round(catScore);
+        sinUsoN++;
+      } else if (!cat && circScore >= 30) {
+        // No catalog loaded, weak circ match → sin-uso
+        estado = 'sin-uso';
+        matchItem = null;
+        prestamos = 0;
+        score = Math.round(circScore);
+        sinUsoN++;
       } else {
-        allResults.push({ ...ref, parsed, matchItem: null, prestamos: 0, score: Math.round(bestScore), estado: 'sin-uso' });
+        // Not found in catalog or circulation
+        estado = cat ? 'no-catalogo' : 'sin-uso';
+        matchItem = null;
+        prestamos = 0;
+        score = Math.round(Math.max(catScore, circScore));
+        if (cat) noCatN++; else sinUsoN++;
       }
+
+      // prestamosPrograma = mismo que prestamos cuando hay programa definido
+      const prestamosTotal = matchItem ? matchItem.prestamos : 0;
+      allResults.push({ ...ref, parsed, matchItem, catItem: catItem||null, prestamos, prestamosTotal, score, estado });
     }
 
-    addLog(`  ✓ ${matched} referencias con circulación verificada · ${noaplica} artículos (no aplica)`);
+    addLog(`  ✓ Con uso: ${conUsoN} · Sin circulación: ${sinUsoN} · No en catálogo: ${noCatN} · Artículos: ${noaplica}`);
     addLog('▸ Construyendo dashboard...');
     await new Promise(r => setTimeout(r, 30));
 
@@ -1155,29 +1335,38 @@ async function procesarDatos() {
 // ══════════════════════════════════════════════════════════
 function renderDashboard(refs, circ, results) {
   const periodo = document.getElementById('inputPeriodo').value;
-  const totalPrestamos = circ.reduce((a,c) => a+c.prestamos, 0);
+  const totalPrestamos = programaActivo
+    ? circ.reduce((a,c2) => a + (c2.prestamosEfectivos||0), 0)
+    : circ.reduce((a,c2) => a + c2.prestamos, 0);
 
   // Cards
-  const conUso = results.filter(r=>r.estado==='con-uso');
-  const sinUso = results.filter(r=>r.estado==='sin-uso');
-  const sinUsoBasica = sinUso.filter(r=>r.tipo&&r.tipo.toLowerCase().includes('basi'));
-  const sinUsoComp = sinUso.filter(r=>r.tipo&&r.tipo.toLowerCase().includes('comp'));
+  const normTipo = t => (t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const conUso    = results.filter(r => r.estado === 'con-uso');
+  const sinUso    = results.filter(r => r.estado === 'sin-uso');
+  const noCatalog = results.filter(r => r.estado === 'no-catalogo');
   const asignaturas = [...new Set(refs.map(r=>r.asignatura).filter(Boolean))];
-  const pct = refs.length > 0 ? Math.round((conUso.length / refs.filter(r=>r.estado!=='no-aplica').length) * 100) : 0;
+  const verificables = results.filter(r => r.estado !== 'no-aplica').length;
+  const pct = verificables > 0 ? Math.round((conUso.length / verificables) * 100) : 0;
+  const hasCat = results.some(r => r.estado === 'no-catalogo');
 
   document.getElementById('cTotal').textContent = refs.length;
   document.getElementById('cAsig').textContent = asignaturas.length + ' asignaturas';
   document.getElementById('cConUso').textContent = pct + '%';
   document.getElementById('cConUsoN').textContent = conUso.length + ' referencias en uso';
   document.getElementById('cSinUso').textContent = sinUso.length;
-  document.getElementById('cSinUsoSub').textContent = `Básica: ${sinUsoBasica.length} · Comp: ${sinUsoComp.length}`;
-  document.getElementById('cPrestamos').textContent = totalPrestamos.toLocaleString('es-CL');
-  document.getElementById('cPeriodoSub').textContent = circ.length + ' títulos únicos en KOHA';
+  document.getElementById('cSinUsoSub').textContent = hasCat ? 'En catálogo, sin préstamos registrados' : 'Sin circulación detectada';
+  document.getElementById('cNoCat').textContent = hasCat ? noCatalog.length : '—';
+  document.getElementById('cNoCatSub').textContent = hasCat
+    ? 'No encontradas en el catálogo'
+    : `Carga el catálogo para ver · ${totalPrestamos.toLocaleString('es-CL')} préstamos totales`;
+
+  // Programa activo global
+  programaActivo = document.getElementById('inputPrograma').value.trim();
 
   // Header badge
-  if (periodo) {
+  if (periodo || programaActivo) {
     const badge = document.getElementById('headerPeriodo');
-    badge.textContent = 'Período ' + periodo;
+    badge.textContent = [periodo, programaActivo ? '· ' + programaActivo : ''].filter(Boolean).join(' ');
     badge.style.display = 'inline';
   }
 
@@ -1207,18 +1396,22 @@ function renderDashboard(refs, circ, results) {
     </div>`
   ).join('') || '<div style="padding:16px;color:var(--muted);font-size:12px;">Sin datos</div>';
 
-  // Top sin circulación básica
-  const topSin = sinUsoBasica.slice(0,8);
-  document.getElementById('topSinCirc').innerHTML = topSin.map((r,i) =>
+  // Panel: sin catálogo (prioridad de adquisición) o sin circulación
+  const topSinBase = hasCat
+    ? results.filter(r => r.estado === 'no-catalogo' && normTipo(r.tipo).includes('basi')).slice(0,8)
+    : sinUso.filter(r => normTipo(r.tipo).includes('basi')).slice(0,8);
+  const panelLabel = hasCat ? '🔴 Sin catálogo · Bibliografía Básica' : '🔴 Sin circulación · Bibliografía Básica';
+  document.querySelector('#topSinCirc').closest('.top-panel').querySelector('.top-panel-header').textContent = panelLabel;
+  document.getElementById('topSinCirc').innerHTML = topSinBase.map((r,i) =>
     `<div class="top-item">
       <span class="top-rank" style="color:var(--red)">${i+1}</span>
       <div class="top-item-text">
         <div class="top-item-title" style="color:var(--text);">${escHtml(r.ref.replace(/<[^>]*>/g,'').substring(0,60))}${r.ref.length>60?'…':''}</div>
         <div class="top-item-author" style="color:var(--muted);">${escHtml(r.asignatura||'')}</div>
       </div>
-      <span style="font-size:11px;color:var(--red);font-weight:700;">0 préstamos</span>
+      <span style="font-size:11px;color:${hasCat?'#92400e':'var(--red)'};font-weight:700;">${hasCat?'No en catálogo':'0 préstamos'}</span>
     </div>`
-  ).join('') || '<div style="padding:16px;color:var(--green);font-size:12px;">✅ Toda la bibliografía básica tiene circulación</div>';
+  ).join('') || `<div style="padding:16px;color:var(--green);font-size:12px;">✅ ${hasCat?'Toda la bibliografía básica está en el catálogo':'Toda la bibliografía básica tiene circulación'}</div>`;
 
   // Poblar filtro asignatura
   const selAsig = document.getElementById('filterAsig');
@@ -1251,13 +1444,20 @@ function renderCharts(results) {
 
   // ── Donut: cobertura global ──────────────────────────
   if (chartDonut) chartDonut.destroy();
+  const noCatCount = results.filter(r => r.estado === 'no-catalogo').length;
+  const sinUsoCount = results.filter(r => r.estado === 'sin-uso').length;
+  const hasCatChart = noCatCount > 0;
   chartDonut = new Chart(document.getElementById('chartDonut'), {
     type: 'doughnut',
     data: {
-      labels: ['Con circulación', 'Sin circulación', 'Artículos (no aplica)'],
+      labels: hasCatChart
+        ? ['Con circulación', 'En catálogo, sin uso', 'No en catálogo', 'Artículos']
+        : ['Con circulación', 'Sin circulación', 'Artículos'],
       datasets: [{
-        data: [conUso, sinUso, noAplica],
-        backgroundColor: [green, red, gold],
+        data: hasCatChart
+          ? [conUso, sinUsoCount, noCatCount, noAplica]
+          : [conUso, sinUso, noAplica],
+        backgroundColor: hasCatChart ? [green, '#1e40af', red, gold] : [green, red, gold],
         borderWidth: 2,
         borderColor: '#fff'
       }]
@@ -1283,15 +1483,20 @@ function renderCharts(results) {
     }
   });
 
-  // ── Bar horizontal: cobertura por asignatura ─────────
+  // ── Bar horizontal apilado: cobertura por asignatura ─────────
   const asignaturas = [...new Set(results.map(r => r.asignatura).filter(Boolean))].sort();
-  const asigData = asignaturas.map(a => {
+  const asigConUso = asignaturas.map(a => {
     const grupo = results.filter(r => r.asignatura === a);
     const cu = grupo.filter(r => r.estado === 'con-uso').length;
     const total = grupo.filter(r => r.estado !== 'no-aplica').length;
     return total > 0 ? Math.round(cu/total*100) : 0;
   });
-  const asigColors = asigData.map(v => v >= 70 ? green : v >= 40 ? gold : red);
+  const asigSinUso = asignaturas.map(a => {
+    const grupo = results.filter(r => r.asignatura === a);
+    const su = grupo.filter(r => r.estado === 'sin-uso').length;
+    const total = grupo.filter(r => r.estado !== 'no-aplica').length;
+    return total > 0 ? Math.round(su/total*100) : 0;
+  });
   const asigLabels = asignaturas.map(a => a.length > 30 ? a.slice(0,28)+'\u2026' : a);
 
   if (chartAsig) chartAsig.destroy();
@@ -1299,29 +1504,48 @@ function renderCharts(results) {
     type: 'bar',
     data: {
       labels: asigLabels,
-      datasets: [{
-        label: '% con circulación',
-        data: asigData,
-        backgroundColor: asigColors,
-        borderRadius: 4,
-        borderSkipped: false
-      }]
+      datasets: [
+        {
+          label: 'Con circulación',
+          data: asigConUso,
+          backgroundColor: green,
+          borderRadius: 0,
+          borderSkipped: false
+        },
+        {
+          label: 'En catálogo, sin uso',
+          data: asigSinUso,
+          backgroundColor: '#93c5fd',
+          borderRadius: 0,
+          borderSkipped: false
+        }
+      ]
     },
     options: {
       responsive: true,
       indexAxis: 'y',
       scales: {
         x: {
+          stacked: true,
           min: 0, max: 100,
           ticks: { callback: v => v+'%', font: { family: 'DM Mono', size: 10 } },
           grid: { color: '#f0f2f5' }
         },
-        y: { ticks: { font: { family: 'DM Sans', size: 11 } } }
+        y: {
+          stacked: true,
+          ticks: { font: { family: 'DM Sans', size: 11 } }
+        }
       },
       plugins: {
-        legend: { display: false },
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: { font: { family: 'DM Sans', size: 11 }, padding: 12, boxWidth: 12 }
+        },
         tooltip: {
-          callbacks: { label: ctx => ` ${ctx.parsed.x}% de referencias con circulación` }
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.x}%`
+          }
         }
       }
     }
@@ -1343,9 +1567,8 @@ function aplicarFiltros() {
 
   filtered = allResults.filter(r => {
     if (asig && r.asignatura !== asig) return false;
-    if (filterTipo && !(r.tipo||'').toLowerCase().includes(filterTipo.toLowerCase().slice(0,4))) return false;
-    if (filterEstado === 'con-uso' && r.estado !== 'con-uso') return false;
-    if (filterEstado === 'sin-uso' && r.estado !== 'sin-uso') return false;
+    if (filterTipo && !(r.tipo||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').includes(filterTipo.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').slice(0,4))) return false;
+    if (filterEstado && r.estado !== filterEstado) return false;
     if (search && !norm(r.ref+r.asignatura+(r.matchItem?.titulo||'')).includes(search)) return false;
     return true;
   });
@@ -1398,24 +1621,28 @@ function renderTabla() {
 
   tbody.innerHTML = page.map(r => {
     // Tipo badge
-    const tipoLower = (r.tipo||'').toLowerCase();
-    const tipoBadge = tipoLower.includes('comp')
+    const tipoNorm = (r.tipo||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const tipoBadge = tipoNorm.includes('comp')
       ? '<span class="tipo-badge tipo-comp">Complementaria</span>'
       : '<span class="tipo-badge tipo-basica">Básica</span>';
 
     // Estado badge
     let estadoBadge = '';
-    if (r.estado==='con-uso') estadoBadge = `<span class="estado-badge estado-conuso">✅ ${r.prestamos} préstamos</span>`;
-    else if (r.estado==='sin-uso') estadoBadge = '<span class="estado-badge estado-sinuso">⚠ Sin circulación</span>';
+    if (r.estado==='con-uso')       estadoBadge = `<span class="estado-badge estado-conuso">✅ ${r.prestamos} préstamos</span>`;
+    else if (r.estado==='sin-uso')  estadoBadge = '<span class="estado-badge estado-disponible">📚 En catálogo, sin uso</span>';
+    else if (r.estado==='no-catalogo') estadoBadge = '<span class="estado-badge estado-nocatalogo">❌ No en catálogo</span>';
     else if (r.estado==='no-aplica') estadoBadge = '<span class="estado-badge estado-noaplica">— Artículo</span>';
-    else estadoBadge = '<span class="estado-badge estado-noenc">? No encontrado</span>';
+    else estadoBadge = '<span class="estado-badge estado-noenc">? No verificado</span>';
 
-    // Préstamos cell
-    const p = r.prestamos;
+    // Préstamos cell — muestra préstamos del programa; total general como referencia
+    const p  = r.prestamos;       // del programa (o totales si no hay programa)
+    const pt = r.prestamosTotal || 0; // totales siempre
     const pClass = p >= 20 ? 'high' : p >= 5 ? 'mid' : p >= 1 ? 'low' : 'zero';
+    const totalRef = programaActivo && pt > p
+      ? `<div style="font-size:9.5px;color:var(--muted);margin-top:1px;">${pt} totales en col.</div>` : '';
     const prestamosCell = r.estado === 'no-aplica'
       ? '<td class="prestamos-cell zero">—</td>'
-      : `<td class="prestamos-cell ${pClass}">${p > 0 ? p : '0'}</td>`;
+      : `<td class="prestamos-cell ${pClass}" style="min-width:90px;">${p > 0 ? p : '0'}${totalRef}</td>`;
 
     // Match cell
     let matchCell = '<td><span style="font-size:11px;color:var(--muted);">—</span></td>';
@@ -1486,7 +1713,7 @@ function exportarExcel() {
     ['Análisis de Circulación Bibliográfica · Biblioteca PUCV'],
     ['Carrera/Programa:', carrera, '', 'Período:', periodo],
     [],
-    ['Asignatura','Clave','Tipo','Referencia APA','Título KOHA','Autor KOHA','Signatura','Préstamos','Score Match','Estado']
+    ['Asignatura','Clave','Tipo','Referencia APA','Título KOHA','Autor KOHA','Signatura','Préstamos del Programa','Préstamos Totales Colección','% Del Programa','Score Match','Estado']
   ];
 
   allResults.forEach(r => {
@@ -1499,11 +1726,14 @@ function exportarExcel() {
       r.matchItem?.autor || '',
       r.matchItem?.signatura || '',
       r.prestamos,
+      r.prestamosTotal || r.prestamos,
+      (r.prestamosTotal||0) > 0 ? Math.round(r.prestamos/(r.prestamosTotal||r.prestamos)*100)+'%' : '—',
       r.score >= 0 ? r.score : 'N/A',
       r.estado === 'con-uso' ? 'Con circulación'
-        : r.estado === 'sin-uso' ? 'Sin circulación'
+        : r.estado === 'sin-uso' ? 'En catálogo, sin circulación'
+        : r.estado === 'no-catalogo' ? 'No en catálogo (adquisición)'
         : r.estado === 'no-aplica' ? 'Artículo (no aplica)'
-        : 'No encontrado'
+        : 'No verificado'
     ]);
   });
 
@@ -1544,7 +1774,7 @@ function agregarResumen(wb, periodo, carrera) {
     const verificables = conUso + sinUso;
     const pct = verificables > 0 ? Math.round(conUso/verificables*100) : 0;
     const totalPrest = grupo.reduce((a,r)=>a+r.prestamos,0);
-    const basicaSinUso = grupo.filter(r=>r.estado==='sin-uso'&&(r.tipo||'').toLowerCase().includes('basi')).length;
+    const basicaSinUso = grupo.filter(r=>r.estado==='sin-uso'&&(r.tipo||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').includes('basi')).length;
     const clave = grupo[0]?.clave||'';
     resData.push([asig, clave, grupo.length, conUso, sinUso, noAp, pct+'%', totalPrest, basicaSinUso]);
   });
