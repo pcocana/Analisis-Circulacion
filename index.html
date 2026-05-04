@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Análisis de Circulación Bibliográfica · Biblioteca PUCV</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -616,6 +617,37 @@ body {
 .btn-export.secondary:hover { background: var(--navy-light); }
 
 .export-note { font-size: 11.5px; color: var(--muted); }
+
+/* ── CHARTS ── */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+@media(max-width:900px){.charts-grid{grid-template-columns:1fr 1fr;}}
+@media(max-width:600px){.charts-grid{grid-template-columns:1fr;}}
+
+.chart-panel {
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
+  padding: 18px 18px 14px;
+}
+.chart-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.chart-panel canvas { display: block; }
+.chart-panel-wide {
+  grid-column: span 2;
+}
+@media(max-width:900px){.chart-panel-wide{grid-column:span 1;}}
 </style>
 </head>
 <body>
@@ -705,7 +737,7 @@ body {
       <div class="card c-red">
         <div class="card-icon">⚠️</div>
         <div class="card-value" id="cSinUso">0</div>
-        <div class="card-label">Sin circulación</div>
+        <div class="card-label">Sin circulación <span style="font-size:9px;font-weight:500;letter-spacing:0;text-transform:none;background:rgba(176,42,55,.12);padding:1px 6px;border-radius:10px;margin-left:4px;">referencias</span></div>
         <div class="card-sub" id="cSinUsoSub">Básica: 0 · Comp: 0</div>
       </div>
       <div class="card c-gold">
@@ -713,6 +745,19 @@ body {
         <div class="card-value" id="cPrestamos">0</div>
         <div class="card-label">Préstamos período</div>
         <div class="card-sub" id="cPeriodoSub">títulos únicos en circulación</div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="section-title"><span>Visualización</span><span class="line"></span></div>
+    <div class="charts-grid">
+      <div class="chart-panel">
+        <div class="chart-title">Cobertura global de circulación</div>
+        <canvas id="chartDonut" height="200"></canvas>
+      </div>
+      <div class="chart-panel chart-panel-wide">
+        <div class="chart-title">Cobertura por asignatura (% bibliografía con circulación)</div>
+        <canvas id="chartAsig" height="200"></canvas>
       </div>
     </div>
 
@@ -1136,8 +1181,15 @@ function renderDashboard(refs, circ, results) {
     badge.style.display = 'inline';
   }
 
-  // Top más prestados de la bibliografía
-  const topMas = [...conUso].sort((a,b)=>b.prestamos-a.prestamos).slice(0,8);
+  // Top más prestados — deduplicar por título KOHA (mismo libro pedido en varias asignaturas)
+  const topMasMap = new Map();
+  conUso.forEach(r => {
+    const key = norm(r.matchItem?.titulo||'') + '||' + norm(r.matchItem?.autor||'');
+    if (!topMasMap.has(key) || r.prestamos > topMasMap.get(key).prestamos) {
+      topMasMap.set(key, r);
+    }
+  });
+  const topMas = [...topMasMap.values()].sort((a,b)=>b.prestamos-a.prestamos).slice(0,8);
   const maxP = topMas[0]?.prestamos || 1;
   document.getElementById('topMasPrestados').innerHTML = topMas.map((r,i) =>
     `<div class="top-item">
@@ -1180,11 +1232,103 @@ function renderDashboard(refs, circ, results) {
 
   filtered = [...allResults];
   sortTable('prestamos', true);
+  renderCharts(allResults);
 }
 
 // ══════════════════════════════════════════════════════════
-// FILTROS Y TABLA
+// CHARTS
 // ══════════════════════════════════════════════════════════
+let chartDonut = null, chartAsig = null;
+
+function renderCharts(results) {
+  const conUso   = results.filter(r => r.estado === 'con-uso').length;
+  const sinUso   = results.filter(r => r.estado === 'sin-uso').length;
+  const noAplica = results.filter(r => r.estado === 'no-aplica').length;
+
+  const gold  = '#C99700';
+  const green = '#1a7a4a';
+  const red   = '#b02a37';
+
+  // ── Donut: cobertura global ──────────────────────────
+  if (chartDonut) chartDonut.destroy();
+  chartDonut = new Chart(document.getElementById('chartDonut'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Con circulación', 'Sin circulación', 'Artículos (no aplica)'],
+      datasets: [{
+        data: [conUso, sinUso, noAplica],
+        backgroundColor: [green, red, gold],
+        borderWidth: 2,
+        borderColor: '#fff'
+      }]
+    },
+    options: {
+      responsive: true,
+      cutout: '62%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { font: { family: 'DM Sans', size: 11 }, padding: 10, boxWidth: 12 }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+              const pct = total > 0 ? Math.round(ctx.parsed/total*100) : 0;
+              return ` ${ctx.label}: ${ctx.parsed} refs (${pct}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
+
+  // ── Bar horizontal: cobertura por asignatura ─────────
+  const asignaturas = [...new Set(results.map(r => r.asignatura).filter(Boolean))].sort();
+  const asigData = asignaturas.map(a => {
+    const grupo = results.filter(r => r.asignatura === a);
+    const cu = grupo.filter(r => r.estado === 'con-uso').length;
+    const total = grupo.filter(r => r.estado !== 'no-aplica').length;
+    return total > 0 ? Math.round(cu/total*100) : 0;
+  });
+  const asigColors = asigData.map(v => v >= 70 ? green : v >= 40 ? gold : red);
+  const asigLabels = asignaturas.map(a => a.length > 30 ? a.slice(0,28)+'\u2026' : a);
+
+  if (chartAsig) chartAsig.destroy();
+  chartAsig = new Chart(document.getElementById('chartAsig'), {
+    type: 'bar',
+    data: {
+      labels: asigLabels,
+      datasets: [{
+        label: '% con circulación',
+        data: asigData,
+        backgroundColor: asigColors,
+        borderRadius: 4,
+        borderSkipped: false
+      }]
+    },
+    options: {
+      responsive: true,
+      indexAxis: 'y',
+      scales: {
+        x: {
+          min: 0, max: 100,
+          ticks: { callback: v => v+'%', font: { family: 'DM Mono', size: 10 } },
+          grid: { color: '#f0f2f5' }
+        },
+        y: { ticks: { font: { family: 'DM Sans', size: 11 } } }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: { label: ctx => ` ${ctx.parsed.x}% de referencias con circulación` }
+        }
+      }
+    }
+  });
+}
+
+
 function setRadio(grupo, el) {
   document.querySelectorAll(`#radio${grupo==='tipo'?'Tipo':'Estado'} .radio-btn`).forEach(b=>b.classList.remove('active'));
   el.classList.add('active');
