@@ -244,6 +244,7 @@ body {
 .log-line { opacity: .7; }
 .log-line.active { opacity: 1; color: #90ee90; }
 .log-line.error { color: #ff6b6b; }
+.log-line.warn  { opacity: 1; color: #fbbf24; }
 
 /* ── DASHBOARD ── */
 .dashboard { display: none; }
@@ -1078,9 +1079,14 @@ function parsearExtractor(wb) {
 
   const headers = rows[headerRow].map(c => norm(String(c)));
   const iClave = headers.findIndex(h => h.includes('clave'));
-  const iAsig = headers.findIndex(h => h.includes('asignatura') || h.includes('nombre'));
-  const iTipo = headers.findIndex(h => h.includes('tipo') || h.includes('bibliog'));
-  const iRef = headers.findIndex(h => h.includes('referencia') || h.includes('ref'));
+  const iAsig  = headers.findIndex(h => h.includes('asignatura') || h.includes('nombre') || h.includes('curso') || h.includes('materia'));
+  const iTipo  = headers.findIndex(h => h.includes('tipo') || h.includes('bibliog'));
+  const iRef   = headers.findIndex(h => h.includes('referencia') || h.includes('ref'));
+
+  // Detectar si faltan columnas clave
+  const columnasSinDetectar = [];
+  if (iAsig  === -1) columnasSinDetectar.push('Asignatura');
+  if (iRef   === -1) columnasSinDetectar.push('Referencia');
 
   const refs = [];
   let lastClave = '', lastAsig = '', lastTipo = 'Básica';
@@ -1088,18 +1094,22 @@ function parsearExtractor(wb) {
   for (let i = headerRow + 1; i < rows.length; i++) {
     const r = rows[i];
     const clave = String(r[iClave] || '').trim() || lastClave;
-    const asig = String(r[iAsig] || '').trim() || lastAsig;
-    const tipo = String(r[iTipo] || '').trim() || lastTipo;
-    const ref = String(r[iRef !== -1 ? iRef : r.length - 1] || '').trim();
+    const asig  = String(r[iAsig !== -1 ? iAsig : -1] || '').trim() || lastAsig;
+    const tipo  = String(r[iTipo] || '').trim() || lastTipo;
+    const ref   = String(r[iRef !== -1 ? iRef : r.length - 1] || '').trim();
 
     if (clave) lastClave = clave;
-    if (asig) lastAsig = asig;
+    if (asig)  lastAsig  = asig;
     if (tipo && tipo.length > 1) lastTipo = tipo;
 
     if (ref && ref.length > 15) {
       refs.push({ clave: lastClave, asignatura: lastAsig, tipo: lastTipo, ref });
     }
   }
+
+  // Adjuntar advertencias al array para que procesarDatos pueda leerlas
+  refs._columnasSinDetectar = columnasSinDetectar;
+  refs._sinAsignatura = iAsig === -1;
   return refs;
 }
 
@@ -1111,28 +1121,52 @@ function parsearCirculacion(wb) {
   let headerRow = 0;
   for (let i = 0; i < Math.min(rows.length, 5); i++) {
     const r = rows[i].map(c2 => norm(String(c2)));
-    if (r.some(c2 => c2.includes('titulo') || c2.includes('signatura') || c2.includes('autor'))) {
+    if (r.some(c2 => c2.includes('titulo') || c2.includes('signatura') || c2.includes('autor') || c2.includes('inventario') || c2.includes('barcode'))) {
       headerRow = i; break;
     }
   }
 
   const headers = rows[headerRow].map(c2 => norm(String(c2)));
-  const iCarrera   = headers.findIndex(h => h.includes('carrera') || h.includes('programa'));
-  const iSignatura = headers.findIndex(h => h.includes('signatura'));
-  const iTitulo    = headers.findIndex(h => h.includes('titulo') || h.includes('titu'));
-  const iAutor     = headers.findIndex(h => h.includes('autor'));
+  const iCarrera    = headers.findIndex(h => h.includes('carrera') || h.includes('programa'));
+  const iSignatura  = headers.findIndex(h => h.includes('signatura') || h.includes('topog'));
+  const iTitulo     = headers.findIndex(h => h.includes('titulo') || h.includes('titu'));
+  const iAutor      = headers.findIndex(h => h.includes('autor'));
+  // ── NUEVO: detectar columna de número de inventario ──
+  const iInventario = headers.findIndex(h =>
+    h === 'inventario' || h === 'barcode' ||
+    h.includes('num inventario') || h.includes('numinventario') ||
+    h.includes('numero inventario') || h.includes('numeroinventario') ||
+    h.includes('n inventario') || h.includes('nro inventario') ||
+    h.includes('item number') || h.includes('itemnumber') ||
+    h.includes('codigo barra') || h.includes('codigobarra') ||
+    (h.includes('inventario') && !h.includes('prestamo'))
+  );
 
-  // Agrupar por título+autor → contar préstamos totales y por carrera
+  // Si hay columna de inventario: agrupar por N° inventario (cada fila = 1 transacción de ese ejemplar)
+  // Si no: fallback al comportamiento anterior (título+autor)
+  const usaInventario = iInventario !== -1;
+
   const map = new Map();
   for (let i = headerRow + 1; i < rows.length; i++) {
     const r = rows[i];
-    const titulo    = String(r[iTitulo    !== -1 ? iTitulo    : 2] || '').trim();
-    const autor     = String(r[iAutor     !== -1 ? iAutor     : 3] || '').trim();
-    const signatura = String(r[iSignatura !== -1 ? iSignatura : 1] || '').trim();
-    const carrera   = String(r[iCarrera   !== -1 ? iCarrera   : 0] || '').trim();
-    if (!titulo) continue;
-    const key = norm(titulo) + '||' + norm(autor);
-    if (!map.has(key)) map.set(key, { titulo, autor, signatura, prestamos: 0, porCarrera: {} });
+    const titulo     = String(r[iTitulo    !== -1 ? iTitulo    : 2] || '').trim();
+    const autor      = String(r[iAutor     !== -1 ? iAutor     : 3] || '').trim();
+    const signatura  = String(r[iSignatura !== -1 ? iSignatura : 1] || '').trim();
+    const carrera    = String(r[iCarrera   !== -1 ? iCarrera   : 0] || '').trim();
+    const inventario = usaInventario ? String(r[iInventario] || '').trim() : '';
+
+    if (!titulo && !inventario) continue;
+
+    // Clave primaria: número de inventario (único por ejemplar); fallback: título+autor
+    const key = (usaInventario && inventario) ? inventario : (norm(titulo) + '||' + norm(autor));
+
+    if (!map.has(key)) {
+      map.set(key, { titulo, autor, signatura, numero_inventario: inventario, prestamos: 0, porCarrera: {}, _usaInventario: usaInventario });
+    } else if (titulo && !map.get(key).titulo) {
+      // Rellenar título si la primera fila no lo tenía
+      map.get(key).titulo = titulo;
+    }
+
     const item = map.get(key);
     item.prestamos++;
     const cn = norm(carrera);
@@ -1148,16 +1182,26 @@ function parsearCatalogo(wb) {
   let headerRow = 0;
   for (let i = 0; i < Math.min(rows.length, 6); i++) {
     const r = rows[i].map(c2 => norm(String(c2)));
-    if (r.some(h => h.includes('titulo') || h.includes('titu') || h.includes('signatura'))) {
+    if (r.some(h => h.includes('titulo') || h.includes('titu') || h.includes('signatura') || h.includes('inventario') || h.includes('barcode'))) {
       headerRow = i; break;
     }
   }
   const headers = rows[headerRow].map(c2 => norm(String(c2)));
-  const iTitulo   = headers.findIndex(h => h.includes('titulo') || h.includes('titu'));
-  const iAutor    = headers.findIndex(h => h.includes('autor'));
-  const iSignat   = headers.findIndex(h => h.includes('signatura') || h.includes('topog'));
-  const iAnio     = headers.findIndex(h => h.includes('anio') || h.includes('año') || h.includes('fecha') || h.includes('year'));
-  const iEjemp    = headers.findIndex(h => h.includes('ejemplar') || h.includes('copies') || h.includes('cantidad'));
+  const iTitulo     = headers.findIndex(h => h.includes('titulo') || h.includes('titu'));
+  const iAutor      = headers.findIndex(h => h.includes('autor'));
+  const iSignat     = headers.findIndex(h => h.includes('signatura') || h.includes('topog'));
+  const iAnio       = headers.findIndex(h => h.includes('anio') || h.includes('año') || h.includes('fecha') || h.includes('year'));
+  const iEjemp      = headers.findIndex(h => h.includes('ejemplar') || h.includes('copies') || h.includes('cantidad'));
+  // ── NUEVO: detectar columna de número de inventario ──
+  const iInventario = headers.findIndex(h =>
+    h === 'inventario' || h === 'barcode' ||
+    h.includes('num inventario') || h.includes('numinventario') ||
+    h.includes('numero inventario') || h.includes('numeroinventario') ||
+    h.includes('n inventario') || h.includes('nro inventario') ||
+    h.includes('item number') || h.includes('itemnumber') ||
+    h.includes('codigo barra') || h.includes('codigobarra') ||
+    (h.includes('inventario') && !h.includes('prestamo'))
+  );
 
   const items = [];
   for (let i = headerRow + 1; i < rows.length; i++) {
@@ -1166,13 +1210,42 @@ function parsearCatalogo(wb) {
     if (!titulo || titulo.length < 3) continue;
     items.push({
       titulo,
-      autor:     String(r[iAutor    !== -1 ? iAutor    : 1] || '').trim(),
-      signatura: String(r[iSignat   !== -1 ? iSignat   : 2] || '').trim(),
-      anio:      String(r[iAnio     !== -1 ? iAnio     : 3] || '').trim(),
-      ejemplares: parseInt(r[iEjemp !== -1 ? iEjemp    : -1]) || 1
+      autor:             String(r[iAutor    !== -1 ? iAutor    : 1] || '').trim(),
+      signatura:         String(r[iSignat   !== -1 ? iSignat   : 2] || '').trim(),
+      anio:              String(r[iAnio     !== -1 ? iAnio     : 3] || '').trim(),
+      ejemplares:        parseInt(r[iEjemp  !== -1 ? iEjemp   : -1]) || 1,
+      numero_inventario: iInventario !== -1 ? String(r[iInventario] || '').trim() : ''  // ← NUEVO
     });
   }
   return items;
+}
+
+// ══════════════════════════════════════════════════════════
+// VÍNCULO CATÁLOGO ↔ CIRCULACIÓN POR N° INVENTARIO
+// Une los dos archivos por número de inventario cuando ambos
+// lo tienen, evitando el fuzzy matching título-a-título.
+// ══════════════════════════════════════════════════════════
+function vincularPorInventario(cat, circ) {
+  // Construir lookup: número de inventario → ítem de circulación
+  const porInv = new Map();
+  for (const c of circ) {
+    if (c.numero_inventario) porInv.set(c.numero_inventario, c);
+  }
+
+  let exactos = 0;
+  for (const item of cat) {
+    if (item.numero_inventario && porInv.has(item.numero_inventario)) {
+      item._circItem = porInv.get(item.numero_inventario);  // join exacto
+      exactos++;
+    }
+  }
+
+  return {
+    exactos,
+    totalCat: cat.length,
+    totalCircInv: porInv.size,
+    activo: porInv.size > 0 && cat.some(c => c.numero_inventario)
+  };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1199,7 +1272,14 @@ async function procesarDatos() {
     addLog('▸ Leyendo Excel del Extractor Masivo...');
     await new Promise(r => setTimeout(r, 30));
     const refs = parsearExtractor(rawExt);
-    addLog(`  ✓ ${refs.length} referencias en ${new Set(refs.map(r=>r.asignatura)).size} asignaturas`);
+    const asigCount = new Set(refs.map(r => r.asignatura).filter(Boolean)).size;
+    addLog(`  ✓ ${refs.length} referencias en ${asigCount} asignatura${asigCount !== 1 ? 's' : ''}`);
+    if (refs._sinAsignatura) {
+      addLog('  ⚠️ Columna "Asignatura" no detectada en el Extractor — el gráfico por asignatura no estará disponible', 'warn');
+    }
+    if (refs._columnasSinDetectar && refs._columnasSinDetectar.length > 0) {
+      addLog(`  ⚠️ Columnas no encontradas: ${refs._columnasSinDetectar.join(', ')} — verifique los encabezados del archivo`, 'warn');
+    }
 
     addLog('▸ Leyendo Excel de Circulación KOHA...');
     await new Promise(r => setTimeout(r, 30));
@@ -1215,6 +1295,17 @@ async function procesarDatos() {
       addLog(`  ✓ ${cat.length} títulos en el catálogo`);
     } else {
       addLog('  ℹ Sin catálogo cargado — solo se usará circulación para el análisis');
+    }
+
+    // ── NUEVO: vincular catálogo ↔ circulación por N° inventario ──
+    let joinInfo = { activo: false };
+    if (cat) {
+      joinInfo = vincularPorInventario(cat, circ);
+      if (joinInfo.activo) {
+        addLog(`  🔗 Join por N° inventario: ${joinInfo.exactos} de ${joinInfo.totalCat} ítems enlazados exactamente (circulación sin fuzzy matching)`);
+      } else {
+        addLog('  ℹ Sin N° inventario en los archivos — se usará matching fuzzy por título/autor');
+      }
     }
 
     const programaInput = document.getElementById('inputPrograma').value.trim();
@@ -1262,15 +1353,30 @@ async function procesarDatos() {
         if (catScore < THRESHOLD) catItem = null;
       }
 
-      // Step 2: match against circulation
-      let circScore = 0, circItem = null;
-      for (const item of circ) {
-        const { score } = matchScore(parsed, item);
-        if (score > circScore) { circScore = score; circItem = item; }
+      // Step 2: obtener datos de circulación
+      // ── Si el ítem del catálogo ya está vinculado por N° inventario → join exacto
+      // ── Si no → fuzzy matching contra la tabla de circulación (comportamiento anterior)
+      let circScore = 0, circItem = null, _joinInventario = false;
+
+      if (catItem && catItem._circItem) {
+        // Join exacto por número de inventario — sin búsqueda fuzzy
+        circItem     = catItem._circItem;
+        circScore    = 100;
+        _joinInventario = true;
+      } else {
+        // Fallback: fuzzy matching contra circulación
+        for (const item of circ) {
+          const { score } = matchScore(parsed, item);
+          if (score > circScore) { circScore = score; circItem = item; }
+        }
       }
       // Solo cuenta como "con uso" si hay préstamos efectivos del programa
-      if (circScore < THRESHOLD || (programaNorm && circItem && circItem.prestamosEfectivos === 0)) {
+      // (join exacto por inventario siempre pasa el umbral)
+      if (!_joinInventario && (circScore < THRESHOLD || (programaNorm && circItem && circItem.prestamosEfectivos === 0))) {
         circItem = null;
+      }
+      if (_joinInventario && programaNorm && circItem && circItem.prestamosEfectivos === 0) {
+        circItem = null; // en catálogo con inventario pero sin préstamos del programa
       }
 
       // Determine estado
@@ -1307,10 +1413,14 @@ async function procesarDatos() {
 
       // prestamosPrograma = mismo que prestamos cuando hay programa definido
       const prestamosTotal = matchItem ? matchItem.prestamos : 0;
-      allResults.push({ ...ref, parsed, matchItem, catItem: catItem||null, prestamos, prestamosTotal, score, estado });
+      allResults.push({ ...ref, parsed, matchItem, catItem: catItem||null, prestamos, prestamosTotal, score, estado, _joinInventario });
     }
 
     addLog(`  ✓ Con uso: ${conUsoN} · Sin circulación: ${sinUsoN} · No en catálogo: ${noCatN} · Artículos: ${noaplica}`);
+    if (joinInfo.activo) {
+      const pctJoin = joinInfo.totalCat > 0 ? Math.round(joinInfo.exactos / joinInfo.totalCat * 100) : 0;
+      addLog(`  🔗 ${pctJoin}% de los ítems del catálogo enlazados por inventario (${joinInfo.exactos}/${joinInfo.totalCat})`);
+    }
     addLog('▸ Construyendo dashboard...');
     await new Promise(r => setTimeout(r, 30));
 
@@ -1397,10 +1507,35 @@ function renderDashboard(refs, circ, results) {
   ).join('') || '<div style="padding:16px;color:var(--muted);font-size:12px;">Sin datos</div>';
 
   // Panel: sin catálogo (prioridad de adquisición) o sin circulación
-  const topSinBase = hasCat
-    ? results.filter(r => r.estado === 'no-catalogo' && normTipo(r.tipo).includes('basi')).slice(0,8)
-    : sinUso.filter(r => normTipo(r.tipo).includes('basi')).slice(0,8);
-  const panelLabel = hasCat ? '🔴 Sin catálogo · Bibliografía Básica' : '🔴 Sin circulación · Bibliografía Básica';
+  // hasCat = hay ítems no encontrados en el catálogo
+  // Mostrar "Sin catálogo" solo si hay refs BÁSICAS que realmente no están en el catálogo
+  const sinCatBasica = results.filter(r => r.estado === 'no-catalogo' && normTipo(r.tipo).includes('basi'));
+  const sinCircBasica = results.filter(r => r.estado === 'sin-uso'     && normTipo(r.tipo).includes('basi'));
+
+  let topSinBase, panelLabel, panelColor, panelEtiqueta, panelMensajeOk;
+  if (sinCatBasica.length > 0) {
+    // Hay bibliografía básica no encontrada en el catálogo → modo "sin catálogo"
+    topSinBase     = sinCatBasica.slice(0, 8);
+    panelLabel     = '🔴 Sin catálogo · Bibliografía Básica';
+    panelColor     = '#92400e';
+    panelEtiqueta  = 'No en catálogo';
+    panelMensajeOk = '✅ Toda la bibliografía básica está en el catálogo';
+  } else if (hasCat) {
+    // Catálogo cargado, toda la básica está en él — mostrar las sin circulación
+    topSinBase     = sinCircBasica.slice(0, 8);
+    panelLabel     = '📭 Sin circulación · Bibliografía Básica';
+    panelColor     = 'var(--red)';
+    panelEtiqueta  = '0 préstamos';
+    panelMensajeOk = '✅ Toda la bibliografía básica registra circulación';
+  } else {
+    // Sin catálogo cargado → mostrar sin circulación
+    topSinBase     = sinCircBasica.slice(0, 8);
+    panelLabel     = '🔴 Sin circulación · Bibliografía Básica';
+    panelColor     = 'var(--red)';
+    panelEtiqueta  = '0 préstamos';
+    panelMensajeOk = '✅ Toda la bibliografía básica tiene circulación';
+  }
+
   document.querySelector('#topSinCirc').closest('.top-panel').querySelector('.top-panel-header').textContent = panelLabel;
   document.getElementById('topSinCirc').innerHTML = topSinBase.map((r,i) =>
     `<div class="top-item">
@@ -1409,9 +1544,9 @@ function renderDashboard(refs, circ, results) {
         <div class="top-item-title" style="color:var(--text);">${escHtml(r.ref.replace(/<[^>]*>/g,'').substring(0,60))}${r.ref.length>60?'…':''}</div>
         <div class="top-item-author" style="color:var(--muted);">${escHtml(r.asignatura||'')}</div>
       </div>
-      <span style="font-size:11px;color:${hasCat?'#92400e':'var(--red)'};font-weight:700;">${hasCat?'No en catálogo':'0 préstamos'}</span>
+      <span style="font-size:11px;color:${panelColor};font-weight:700;">${panelEtiqueta}</span>
     </div>`
-  ).join('') || `<div style="padding:16px;color:var(--green);font-size:12px;">✅ ${hasCat?'Toda la bibliografía básica está en el catálogo':'Toda la bibliografía básica tiene circulación'}</div>`;
+  ).join('') || `<div style="padding:16px;color:var(--green);font-size:12px;">${panelMensajeOk}</div>`;
 
   // Poblar filtro asignatura
   const selAsig = document.getElementById('filterAsig');
@@ -1485,22 +1620,56 @@ function renderCharts(results) {
 
   // ── Bar horizontal apilado: cobertura por asignatura ─────────
   const asignaturas = [...new Set(results.map(r => r.asignatura).filter(Boolean))].sort();
+  const asigCanvas  = document.getElementById('chartAsig');
+
+  // Si no hay datos de asignatura → mostrar aviso en lugar del gráfico vacío
+  if (asignaturas.length === 0) {
+    if (chartAsig) { chartAsig.destroy(); chartAsig = null; }
+    asigCanvas.style.display = 'none';
+    let aviso = asigCanvas.parentElement.querySelector('.chart-sin-datos');
+    if (!aviso) {
+      aviso = document.createElement('div');
+      aviso.className = 'chart-sin-datos';
+      aviso.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 16px;gap:8px;text-align:center;';
+      asigCanvas.parentElement.appendChild(aviso);
+    }
+    aviso.innerHTML = `
+      <div style="font-size:28px">📋</div>
+      <div style="font-weight:700;color:var(--navy);font-size:13px;">Sin datos de asignatura</div>
+      <div style="color:var(--muted);font-size:12px;max-width:260px;line-height:1.5;">
+        El archivo del Extractor Masivo no contiene una columna <strong>"Asignatura"</strong> (o equivalente).<br>
+        Agréguela para ver la cobertura por curso.
+      </div>`;
+    return;
+  }
+
+  // Restablecer canvas si antes mostraba el aviso
+  asigCanvas.style.display = 'block';
+  const avisoAnterior = asigCanvas.parentElement.querySelector('.chart-sin-datos');
+  if (avisoAnterior) avisoAnterior.remove();
+
   const asigConUso = asignaturas.map(a => {
     const grupo = results.filter(r => r.asignatura === a);
-    const cu = grupo.filter(r => r.estado === 'con-uso').length;
+    const cu    = grupo.filter(r => r.estado === 'con-uso').length;
     const total = grupo.filter(r => r.estado !== 'no-aplica').length;
-    return total > 0 ? Math.round(cu/total*100) : 0;
+    return total > 0 ? Math.round(cu / total * 100) : 0;
   });
   const asigSinUso = asignaturas.map(a => {
     const grupo = results.filter(r => r.asignatura === a);
-    const su = grupo.filter(r => r.estado === 'sin-uso').length;
+    const su    = grupo.filter(r => r.estado === 'sin-uso').length;
     const total = grupo.filter(r => r.estado !== 'no-aplica').length;
-    return total > 0 ? Math.round(su/total*100) : 0;
+    return total > 0 ? Math.round(su / total * 100) : 0;
   });
-  const asigLabels = asignaturas.map(a => a.length > 30 ? a.slice(0,28)+'\u2026' : a);
+  const asigLabels = asignaturas.map(a => a.length > 35 ? a.slice(0, 33) + '\u2026' : a);
+
+  // Altura dinámica según número de asignaturas
+  const chartHeight = Math.max(220, asignaturas.length * 42 + 80);
+  asigCanvas.parentElement.style.height = chartHeight + 'px';
+  asigCanvas.style.height = chartHeight + 'px';
+  asigCanvas.style.maxHeight = 'none';
 
   if (chartAsig) chartAsig.destroy();
-  chartAsig = new Chart(document.getElementById('chartAsig'), {
+  chartAsig = new Chart(asigCanvas, {
     type: 'bar',
     data: {
       labels: asigLabels,
@@ -1513,7 +1682,7 @@ function renderCharts(results) {
           borderSkipped: false
         },
         {
-          label: 'En catálogo, sin uso',
+          label: 'Sin circulación / sin uso',
           data: asigSinUso,
           backgroundColor: '#93c5fd',
           borderRadius: 0,
@@ -1523,6 +1692,7 @@ function renderCharts(results) {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,   // ← CLAVE para barras horizontales
       indexAxis: 'y',
       scales: {
         x: {
@@ -1647,10 +1817,17 @@ function renderTabla() {
     // Match cell
     let matchCell = '<td><span style="font-size:11px;color:var(--muted);">—</span></td>';
     if (r.matchItem) {
+      const invNum = r.matchItem.numero_inventario;
+      const joinLabel = r._joinInventario
+        ? `<span title="Vinculado exactamente por N° inventario" style="color:var(--green);font-size:10px;font-weight:600">🔗 inv. exacto</span>`
+        : `<span style="color:var(--muted);font-size:10px">score ${r.score}</span>`;
+      const invTag = invNum
+        ? `<span style="font-family:monospace;font-size:10px;color:var(--muted);margin-left:4px">· ${invNum}</span>`
+        : '';
       matchCell = `<td>
         <div class="match-title">${escHtml(r.matchItem.titulo.substring(0,60))}${r.matchItem.titulo.length>60?'…':''}</div>
         <div class="match-author">${escHtml(r.matchItem.autor||'')}</div>
-        <div class="match-score">score ${r.score} · ${r.matchItem.signatura}</div>
+        <div class="match-score">${joinLabel}${invTag} · ${r.matchItem.signatura}</div>
       </td>`;
     }
 
